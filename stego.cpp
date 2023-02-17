@@ -4,35 +4,122 @@
 using namespace std;
 using namespace cv;
 
-// Function to generate a secret image from a cover image
-Mat generateSecretImage(Mat &coverImage, double targetSSIM)
-{
-    // TODO: Implement the algorithm to generate a secret image with minimal distortion
-    // using the cover image and the target SSIM value
+struct EncodedImages {
+    Mat secretImage;
+    Mat stegoImage;
+};
 
-    // Dummy implementation that just returns the cover image
-    return coverImage.clone();
+
+// Converts a byte (unsigned char) to an 8-bit binary string
+string byteToBinary(unsigned char b) {
+    string binary = "";
+    for (int i = 7; i >= 0; i--) {
+        binary += (b & (1 << i)) ? "1" : "0";
+    }
+
+    return binary;
 }
 
+// Converts a string of characters to a binary string
+string stringToBinary(string input) {
+    string binary = "";
+
+    for (char& c : input) {
+        binary += byteToBinary(c);
+    }
+
+    return binary;
+}
+
+int transformBitsToDecimal(string bits) {
+    int ans = 0;
+    int len = bits.length();
+
+    for(int i = len - 1; i >= 0 ; i--) {
+        ans += (pow(2, i) * (bits[len - i] == '1' ? 1 : 0));
+    }
+
+    return ans;
+}
+
+int calculateFEMD(uchar pixel1, uchar pixel2) {
+    if(pixel1 > 255 || pixel1 < 0 || pixel2 > 255 || pixel2 < 0) {
+        return -1;
+    }
+
+    int lsbPixel1 = pixel1 & 1;
+    int tempCalc = floor((double)(pixel1)/2) + pixel2;
+
+    int femd1 = lsbPixel1 * 2;
+    int femd2 = tempCalc & 1;
+    
+    return femd1 + femd2;
+}
+
+
 // Function to encode a message into a cover image using the LSB matching revisited method
-void encodeLSBMatchingRevisited(Mat &coverImage, string message)
+EncodedImages encodeLSBMatchingRevisited(Mat &coverImage, string message)
 {
-    // Generate a secret image from the cover image with a target SSIM value
-    double targetSSIM = 0.95;
-    Mat secretImage = generateSecretImage(coverImage, targetSSIM);
+    EncodedImages result = {};
 
-    // Get the number of message bits to be encoded
-    int numMessageBits = message.size() * 8;
+    // Create a second image to hold the message
+    Mat secretImage = coverImage.clone();
 
-    // Iterate over the pixels of the cover image and the secret image
-    int pixelIndex = 0;
-    for (int row = 0; row < coverImage.rows; row++)
+    // Clone the cover image
+    Mat stegoImage = coverImage.clone();
+
+    // Determine the number of pixels required to store the message
+    int numPixels = message.length() * 8;
+
+    // Determine the maximum message length that can be hidden in the cover image
+    int maxMessageLength = (stegoImage.total() * stegoImage.channels() * 2);
+
+    if (numPixels > maxMessageLength) {
+        cerr << "Message too long to hide in cover image." << endl;
+        exit(1);
+    }
+
+    // Convert the message to binary format
+    string binaryMessage = stringToBinary(message);
+
+    // Keep track over the index of the current message to be embedded
+    int messageIndex = 0;
+
+    for (int row = 0; row < secretImage.rows; row++)
     {
-        for (int col = 0; col < coverImage.cols; col++)
+        for (int col = 0; col < secretImage.cols; col++)
         {
+            // Get the pixel value at the current location
+            uchar pixel = stegoImage.at<uchar>(row, col);
+
+            string binaryPixel = byteToBinary(pixel);
+            string messageKey = "";
+
+            messageKey += binaryMessage[messageIndex];
+            messageKey += binaryMessage[messageIndex + 1];
+            messageIndex += 2;
+            
+            int key = transformBitsToDecimal(messageKey);
+            
+            if (key == calculateFEMD(pixel, pixel)) {
+                secretImage.at<uchar>(row, col) = pixel;
+                stegoImage.at<uchar>(row, col) = pixel;
+            } else if (key == calculateFEMD(pixel , pixel + 1)) {
+                secretImage.at<uchar>(row, col) = pixel;
+                stegoImage.at<uchar>(row, col) = pixel + 1;
+            } else if (key == calculateFEMD(pixel + 1, pixel - 1)) {
+                secretImage.at<uchar>(row, col) = pixel + 1;
+                stegoImage.at<uchar>(row, col) = pixel - 1;
+            } else if (key == calculateFEMD(pixel + 1, pixel)) {
+                secretImage.at<uchar>(row, col) = pixel + 1;
+                stegoImage.at<uchar>(row, col) = pixel;
+            }
+
+
+            /*
             // Get the RGB values of the cover pixel and the secret pixel
-            Vec3b coverPixel = coverImage.at<Vec3b>(row, col);
-            Vec3b secretPixel = secretImage.at<Vec3b>(row, col);
+             Vec3b coverPixel = coverImage.at<Vec3b>(row, col);
+             Vec3b secretPixel = secretImage.at<Vec3b>(row, col);
 
             // Iterate over the channels (BGR)
             for (int channel = 0; channel < 3; channel++)
@@ -68,12 +155,19 @@ void encodeLSBMatchingRevisited(Mat &coverImage, string message)
 
             // Set the modified cover pixel value
             coverImage.at<Vec3b>(row, col) = coverPixel;
+            */
         }
     }
+
+    result.secretImage = secretImage;
+    result.stegoImage = secretImage;
+
+    return result;
 }
 
+/*
 // Function to decode a message from a stego image using the LSB matching revisited method
-string decodeLSBMatchingRevisited(Mat &stegoImage)
+string decodeLSBMatchingRevisited(Mat &secretImage, Mat &stegoImage)
 {
     // Get the number of message bits to be decoded
     int numMessageBits = stegoImage.rows * stegoImage.cols * 3;
@@ -167,22 +261,42 @@ Mat restoreCoverImage(Mat &secretImage, Mat &stegoImage)
 
     return coverImage;
 }
+*/
 
 int main()
 {
     // Load the cover image and the message
-    Mat coverImage = imread("cover.png", IMREAD_COLOR);
-    string message = "Hello, world!";
+    Mat coverImage = imread("images/test_image_1.jpeg", IMREAD_GRAYSCALE);
 
-    // Encode the message into the cover image using the LSB matching revisited method
-    encodeLSBMatchingRevisited(coverImage, message);
+    if (coverImage.empty()) {
+        cerr << "Failed to read the cover image." << endl;
+        return -1;
+    }
 
-    // TODO: Save the stego image
+    // Define the secret message to be hidden
+    string secretMessage = "This is a secret message.";
 
-    // Load the stego image and decode the message using the LSB matching revisited method
-    Mat stegoImage = generateSecretImage(coverImage, 0.95);
-    string decodedMessage = decodeLSBMatchingRevisited(stegoImage);
-    cout << "Decoded message: " << decodedMessage << endl;
+    // Call the function to hide the secret message in the cover image
+    EncodedImages result = encodeLSBMatchingRevisited(coverImage, secretMessage);
+
+    // Display the stego image
+    imshow("Secret Image", result.secretImage);
+    imshow("Stego Image", result.stegoImage);
+
+    waitKey(0);
+
+    // Call the function to extract the secret message from the stego image
+    // string extractedMessage = decodeLSBMatchingRevisited(result.secretImage, result.stegoImage);
+
+    // Display the extracted secret message
+    // cout << "Extracted Message: " << extractedMessage << endl;
+
+    // Call the function to restore the cover image from the stego image
+    // Mat restoredImage = restoreCoverImage(result.secretImage, result.stegoImage);
+
+    // Display the restored cover image
+    // imshow("Restored Image", restoredImage);
+    // waitKey(0);
 
     return 0;
 }
